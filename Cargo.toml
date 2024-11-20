@@ -1,0 +1,9 @@
+[package]
+edition = "2021"
+name = "tari-grpc-bridge"
+version = "0.1.0"
+
+[dependencies]
+anyhow = "1.0"
+minotari_node_grpc_client = {git = "https://github.com/tari-project/tari.git", branch = "development"}
+tokio = {version = "1", features = ["full"]}
