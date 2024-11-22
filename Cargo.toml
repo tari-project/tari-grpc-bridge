@@ -4,6 +4,17 @@ name = "tari-grpc-bridge"
 version = "0.1.0"
 
 [dependencies]
-anyhow = "1.0"
+# TODO: Dependencies for 'hickory-client', 'hickory-resolver' and 'hickory-proto' have been fixed in the 'cargo.lock'
+#       file, as there have been an interface change between versions '0.25.0-alpha.2' and '0.25.0-alpha.3'. Update the
+#       lock file once 'tari-project' is updated.
 minotari_node_grpc_client = {git = "https://github.com/tari-project/tari.git", branch = "development"}
+tari_common_types = {git = "https://github.com/tari-project/tari.git", branch = "development"}
+
+anyhow = "1.0"
+chrono = "0.4.38"
+env_logger = "0.11.5"
+log = { version = "0.4.8", features = ["std"] }
+primitive-types = { version = "0.13.1", features = ["serde"] }
+structopt = "0.3.26"
 tokio = {version = "1", features = ["full"]}
+tonic = "0.12.3"
