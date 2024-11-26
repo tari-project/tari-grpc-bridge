@@ -88,6 +88,13 @@ struct CommandLineArgs {
         help = "Validate the chain with headers, otherwise just use the tip information"
     )]
     validate_with_headers: bool,
+    #[structopt(
+        long,
+        short = "h",
+        default_value = "100",
+        help = "The initial number of headers to fetch from the other base node below its chain tip to find a chain split"
+    )]
+    initial_headers_back: u64,
     #[structopt(long, short = "g", default_value = "info")]
     log_level: String,
 }
@@ -116,19 +123,20 @@ async fn fetch_and_submit_blocks(
     client_name: &str,
     sync_data: &mut SyncData,
     validate_with_headers: bool,
+    initial_headers_back: u64,
     receiver: Receiver<()>,
 ) -> Result<(), Error> {
     // Fetch and compare meta data
     let this_meta_data = if let Some(data) = get_tip_info(this_client).await? {
         data
     } else {
-        warn!(target: LOG_UPDATE, "Client '{}' - no tip info for this client", client_name);
+        warn!(target: LOG_UPDATE, "Service '{}' - no tip info for this base node", client_name);
         return Ok(());
     };
     let this_accumulated_difficulty = U256::from_big_endian(&this_meta_data.accumulated_difficulty);
     debug!(
         target: LOG_UPDATE,
-        "Client '{}' - this tip height: {}, hash: {}, accumulated difficulty: {}",
+        "Service '{}' - this base node tip height: {}, hash: {}, accumulated difficulty: {}",
         client_name,
         this_meta_data.best_block_height,
         FixedHash::try_from(this_meta_data.best_block_hash.clone()).unwrap_or(FixedHash::zero()),
@@ -137,14 +145,14 @@ async fn fetch_and_submit_blocks(
     let other_meta_data = if let Some(data) = get_tip_info(other_client).await? {
         data
     } else {
-        warn!(target: LOG_UPDATE, "Client '{}' - no tip info for other client", client_name);
+        warn!(target: LOG_UPDATE, "Service '{}' - no tip info for other base node", client_name);
         return Ok(());
     };
     let other_accumulated_difficulty =
         U256::from_big_endian(&other_meta_data.accumulated_difficulty);
     debug!(
         target: LOG_UPDATE,
-        "Client '{}' - other tip height: {}, hash: {}, accumulated difficulty: {}",
+        "Service '{}' - other base node tip height: {}, hash: {}, accumulated difficulty: {}",
         client_name,
         other_meta_data.best_block_height,
         FixedHash::try_from(other_meta_data.best_block_hash.clone()).unwrap_or(FixedHash::zero()),
@@ -160,13 +168,13 @@ async fn fetch_and_submit_blocks(
         .as_ref()
         .map(|h| FixedHash::try_from(h.hash.clone()).unwrap_or(FixedHash::zero()))
         .unwrap_or(FixedHash::zero());
-    info!(target: LOG_UPDATE, "Client '{}' - last synced {}, {}", client_name, last_height, last_block);
+    info!(target: LOG_UPDATE, "Service '{}' - last synced {}, {}", client_name, last_height, last_block);
 
     if this_meta_data.best_block_hash == other_meta_data.best_block_hash {
-        info!(target: LOG_UPDATE, "Client '{}' - nothing to do here, we are synced", client_name);
+        info!(target: LOG_UPDATE, "Service '{}' - nothing to do here, we are synced", client_name);
         return Ok(());
     } else if this_accumulated_difficulty >= other_accumulated_difficulty {
-        info!(target: LOG_UPDATE, "Client '{}' - nothing to do here, we are ahead (or equal)", client_name);
+        info!(target: LOG_UPDATE, "Service '{}' - nothing to do here, we are ahead (or equal)", client_name);
         return Ok(());
     }
 
@@ -180,9 +188,9 @@ async fn fetch_and_submit_blocks(
             5,
         )
     } else {
-        100
+        initial_headers_back
     };
-    debug!(target: LOG_UPDATE, "Client '{}' - headers_back {}", client_name, headers_back);
+    debug!(target: LOG_UPDATE, "Service '{}' - headers_back {}", client_name, headers_back);
 
     let mut other_headers = Vec::new();
     if validate_with_headers {
@@ -206,11 +214,11 @@ async fn fetch_and_submit_blocks(
             other_headers.push(header.clone());
             trace!(
                 target: LOG_UPDATE,
-                "Client '{}' - received other header {}, {}",
+                "Service '{}' - received other base node header {}, {}",
                 client_name, header.height, FixedHash::try_from(header.hash).unwrap_or(FixedHash::zero())
             );
         }
-        debug!(target: LOG_UPDATE, "Client '{}' - streamed {} other headers", client_name, other_headers.len());
+        debug!(target: LOG_UPDATE, "Service '{}' - streamed {} other base node headers", client_name, other_headers.len());
     }
 
     // See if our best header or one of our parent headers is in theirs, otherwise just fetch from a lower height
@@ -220,7 +228,7 @@ async fn fetch_and_submit_blocks(
             .iter()
             .any(|h| h.hash == this_meta_data.best_block_hash)
         {
-            debug!(target: LOG_UPDATE, "Client '{}' - our best header is in the other chain", client_name);
+            debug!(target: LOG_UPDATE, "Service '{}' - our best header is in the other chain", client_name);
             (this_meta_data.best_block_height..other_meta_data.best_block_height + 1)
                 .collect::<Vec<_>>()
         } else if let Some(height) = find_chain_split(
@@ -231,7 +239,7 @@ async fn fetch_and_submit_blocks(
         )
         .await?
         {
-            debug!(target: LOG_UPDATE, "Client '{}' - chain split found at height {}", client_name, height);
+            debug!(target: LOG_UPDATE, "Service '{}' - chain split found at height {}", client_name, height);
             (height..other_meta_data.best_block_height + 1).collect::<Vec<_>>()
         } else {
             vec![]
@@ -239,13 +247,13 @@ async fn fetch_and_submit_blocks(
     }
     if missing_blocks.is_empty() {
         missing_blocks = if this_meta_data.best_block_height <= other_meta_data.best_block_height {
-            debug!(target: LOG_UPDATE, "Client '{}' - our best block height <= theirs", client_name);
+            debug!(target: LOG_UPDATE, "Service '{}' - our best block height <= theirs", client_name);
             (this_meta_data
                 .best_block_height
                 .saturating_sub(headers_back)..other_meta_data.best_block_height + 1)
                 .collect::<Vec<_>>()
         } else {
-            debug!(target: LOG_UPDATE, "Client '{}' - our best block height > theirs", client_name);
+            debug!(target: LOG_UPDATE, "Service '{}' - our best block height > theirs", client_name);
             (other_meta_data
                 .best_block_height
                 .saturating_sub(headers_back)..other_meta_data.best_block_height + 1)
@@ -255,7 +263,7 @@ async fn fetch_and_submit_blocks(
 
     // Stream and submit blocks - just one at a time
     debug!(
-        target: LOG_UPDATE, "Client '{}' - attempting to stream blocks {} to {}",
+        target: LOG_UPDATE, "Service '{}' - attempting to stream blocks {} to {}",
         client_name, missing_blocks[0], missing_blocks.last().unwrap()
     );
     for block_number in &missing_blocks {
@@ -269,7 +277,7 @@ async fn fetch_and_submit_blocks(
             .await?
             .into_inner();
         while let Some(resp) = block_stream.message().await? {
-            trace!(target: LOG_UPDATE, "Client '{}' - received block {} from other client", client_name, block_number);
+            trace!(target: LOG_UPDATE, "Service '{}' - received block {} from other base node", client_name, block_number);
             let block = resp.block.unwrap();
             let header = block.header.clone().unwrap();
             let response = match this_client.submit_block(block).await {
@@ -277,7 +285,7 @@ async fn fetch_and_submit_blocks(
                 Err(err) => {
                     warn!(
                         target: LOG_UPDATE,
-                        "Client '{}' - error submitting block {} to this client",
+                        "Service '{}' - error submitting block {} to this base node",
                         client_name, block_number
                     );
                     return Err(err.into());
@@ -285,13 +293,13 @@ async fn fetch_and_submit_blocks(
             };
             trace!(
                 target: LOG_UPDATE,
-                "Client '{}' - submitted block {} to this client (hash response {})",
+                "Service '{}' - submitted block {} to this base node (hash response {})",
                 client_name, block_number, FixedHash::try_from(response.block_hash).unwrap_or(FixedHash::zero())
             );
             sync_data.last_synced_header = Some(header);
         }
     }
-    info!(target: LOG_UPDATE, "Client '{}' - synced {} blocks", client_name, missing_blocks.len());
+    info!(target: LOG_UPDATE, "Service '{}' - synced {} blocks", client_name, missing_blocks.len());
 
     Ok(())
 }
@@ -302,31 +310,32 @@ async fn find_chain_split(
     this_meta_data: MetaData,
     client_name: &str,
 ) -> Result<Option<u64>, Error> {
-    info!(target: LOG_CHAIN_SPLIT, "Client '{}' - find chain split", client_name);
+    info!(target: LOG_CHAIN_SPLIT, "Service '{}' - find chain split", client_name);
     let mut from_height = this_meta_data.best_block_height;
+    const CHUNKS: u64 = 100;
     while from_height > 0 {
         let mut this_headers_stream = this_client
             .list_headers(ListHeadersRequest {
                 from_height,
-                num_headers: min(from_height, 20),
+                num_headers: min(from_height, CHUNKS),
                 sorting: 0,
             })
             .await?
             .into_inner();
         debug!(
-            target: LOG_CHAIN_SPLIT, "Client '{}' - attempting to stream {} headers from height {}",
-            client_name, min(from_height, 20), from_height
+            target: LOG_CHAIN_SPLIT, "Service '{}' - attempting to stream {} local headers from height {}",
+            client_name, min(from_height, CHUNKS), from_height
         );
         while let Some(header) = this_headers_stream.message().await? {
             if let Some(split_header) = other_headers
                 .iter()
                 .find(|h| h.hash == header.header.as_ref().unwrap().hash)
             {
-                debug!(target: LOG_CHAIN_SPLIT, "Client '{}' - found chain split", client_name);
+                debug!(target: LOG_CHAIN_SPLIT, "Service '{}' - found chain split", client_name);
                 return Ok(Some(split_header.height));
             }
         }
-        from_height = from_height.saturating_sub(20);
+        from_height = from_height.saturating_sub(CHUNKS);
     }
     Ok(None)
 }
@@ -347,12 +356,14 @@ fn log_and_print(log_level: LevelFilter, msg: &str, add_newline: bool) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn sync_service(
     this_client_url: String,
     other_client_url: String,
     cadence: u64,
     client_name: String,
     validate_with_headers: bool,
+    initial_headers_back: u64,
     mut shutdown_rx: watch::Receiver<()>,
     connected_tx: Sender<()>,
 ) -> Result<(), Error> {
@@ -436,6 +447,7 @@ async fn sync_service(
                                         &client_name,
                                         &mut sync_data,
                                         validate_with_headers,
+                                        initial_headers_back,
                                         shutdown_rx.clone()
                                     ).await {
                                         log_and_print(
@@ -519,6 +531,7 @@ async fn main() -> Result<(), Error> {
         args.cadence_seconds,
         args.port1.clone(),
         args.validate_with_headers,
+        args.initial_headers_back,
         shutdown_rx.clone(),
         client1_connected_tx,
     );
@@ -530,6 +543,7 @@ async fn main() -> Result<(), Error> {
         args.cadence_seconds,
         args.port2.clone(),
         args.validate_with_headers,
+        args.initial_headers_back,
         shutdown_rx,
         client2_connected_tx,
     );
