@@ -58,36 +58,56 @@ struct CommandLineArgs {
         help = "The number of seconds between sync attempts"
     )]
     cadence_seconds: u64,
+
     #[structopt(
         long,
         default_value = "localhost",
         help = "The IP address of the first base node"
     )]
     ip1: String,
+
     #[structopt(
         long,
         default_value = "localhost",
         help = "The IP address of the second base node"
     )]
     ip2: String,
+
     #[structopt(
         long,
         short = "1",
         help = "The gRPC port number of the first base node"
     )]
     port1: String,
+
     #[structopt(
         long,
         short = "2",
         help = "The gRPC port number of the second base node"
     )]
     port2: String,
+
+    #[structopt(
+        long,
+        default_value = "service1 on <port1>",
+        help = "An alias name for the first service"
+    )]
+    alias1: String,
+
+    #[structopt(
+        long,
+        default_value = "service2 on <port2>",
+        help = "An alias name for the second service"
+    )]
+    alias2: String,
+
     #[structopt(
         long,
         short = "v",
         help = "Validate the chain with headers, otherwise just use the tip information"
     )]
     validate_with_headers: bool,
+
     #[structopt(
         long,
         short = "h",
@@ -95,6 +115,7 @@ struct CommandLineArgs {
         help = "The initial number of headers to fetch from the other base node below its chain tip to find a chain split"
     )]
     initial_headers_back: u64,
+
     #[structopt(long, short = "g", default_value = "info")]
     log_level: String,
 }
@@ -523,13 +544,23 @@ async fn main() -> Result<(), Error> {
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let client1_url = format!("http://{}:{}", args.ip1, args.port1);
     let client2_url = format!("http://{}:{}", args.ip2, args.port2);
+    let alias1 = if args.alias1.is_empty() || args.alias1 == "service1 on <port1>" {
+        format!("service1 on {}", args.port1)
+    } else {
+        args.alias1.clone()
+    };
+    let alias2 = if args.alias2.is_empty() || args.alias2 == "service2 on <port2>" {
+        format!("service2 on {}", args.port2)
+    } else {
+        args.alias2.clone()
+    };
 
     let (client1_connected_tx, mut client1_connected_rx) = watch::channel(());
     let service1 = sync_service(
         client1_url.clone(),
         client2_url.clone(),
         args.cadence_seconds,
-        args.port1.clone(),
+        alias1,
         args.validate_with_headers,
         args.initial_headers_back,
         shutdown_rx.clone(),
@@ -541,7 +572,7 @@ async fn main() -> Result<(), Error> {
         client2_url,
         client1_url,
         args.cadence_seconds,
-        args.port2.clone(),
+        alias2,
         args.validate_with_headers,
         args.initial_headers_back,
         shutdown_rx,
